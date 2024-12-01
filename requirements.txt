@@ -1,1 +1,10 @@
-ultralytics==8.0.145
+numpy==1.24.4
+opencv_python==4.10.0.84
+scipy==1.10.1
+torch==2.4.1
+torchvision==0.19.1
+ultralytics==8.3.29
+onnx==1.17.0
+norfair==2.2.0
+protobuf==5.29.0
+albumentations==1.4.18 --install-option="--no-deps"
