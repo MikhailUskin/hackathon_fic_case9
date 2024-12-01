@@ -16,6 +16,7 @@ from scipy.optimize import linear_sum_assignment
 
 from models import create
 from utils import load_checkpoint, copy_state_dict
+from feature_extract.feature_extraction import FeatureExtraction
 
 
 SHOW_PREDICTIONS = False
@@ -84,6 +85,8 @@ class MCMOT:
         self._global_id = 1000  
         self._local_id_2_global_id = {}  
 
+        self.feature_extraction = FeatureExtraction(r"./assets/osnet_x1_0.onnx", "cuda")
+
     def track(self, timestamp: int, frames: List[np.ndarray], log_filenames: List[str]) -> List[np.ndarray]:
         frames_embeddings, frames_bboxes = self._get_persons_embeddings(frames)
         if frames_embeddings != [{}] * self._num_cams:
@@ -118,31 +121,35 @@ class MCMOT:
         frame: np.ndarray,
         boxes,
     ) -> List[np.ndarray]:
-        persons_imgs = []
+        # persons_imgs = []
         persons_ids = []
+        embeddings = []
 
         for box in boxes:
             x1, y1, x2, y2 = box.xyxy.cpu().int().numpy().reshape(-1)
             person_img = cv2.resize(frame[y1:y2, x1: x2, :], (256, 128))
-            persons_imgs.append(person_img)
+            # persons_imgs.append(person_img)
             try:
                 track_id = box.id.int().item()
             except AttributeError:
                 track_id = -1
             persons_ids.append(track_id)
-        
-        if not persons_imgs:
-            return {}
-        
-        persons_imgs = np.stack(persons_imgs, axis=0)
-        persons_imgs = torch.tensor(persons_imgs.transpose(0, 3, 1, 2)) / 255.
-        persons_imgs = self._fe_transforms(persons_imgs)
 
-        with torch.no_grad():
-            embeddings = self._feature_extractor(persons_imgs)
+            output = self.feature_extraction.predict_img(person_img)
+            embeddings.append(output)
+
+        # if not persons_imgs:
+        #     return {}
+        
+        # persons_imgs = np.stack(persons_imgs, axis=0)
+        # persons_imgs = torch.tensor(persons_imgs.transpose(0, 3, 1, 2)) / 255.
+        # persons_imgs = self._fe_transforms(persons_imgs)
+
+        # with torch.no_grad():
+        #     embeddings = self._feature_extractor(persons_imgs)
 
         return {
-            track_id: embedding.cpu().numpy()
+            track_id: embedding
             for track_id, embedding in zip(persons_ids, embeddings)
         }      
 
@@ -251,7 +258,7 @@ if __name__ == '__main__':
     mcmot = MCMOT(
         person_detector=YOLO(os.path.join(args.mount, "yolov8l.pt")),
         feature_extractor=create_reid_model(reid_model_checkpoint),
-        similarity_threshold=0.5,
+        similarity_threshold=0.03,
         num_cams=len(videos_list),
         log_dir=args.save_dir,
         tracker_path=os.path.join(args.mount, 'bytetrack.yaml')
