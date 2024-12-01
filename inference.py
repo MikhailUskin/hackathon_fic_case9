@@ -14,8 +14,6 @@ from ultralytics import YOLO
 from torch import nn
 from scipy.optimize import linear_sum_assignment
 
-from models import create
-from utils import load_checkpoint, copy_state_dict
 from feature_extract.feature_extraction import FeatureExtraction
 
 
@@ -34,48 +32,16 @@ def get_avg_fps(processing_times: List[float]) -> float:
     return 1 / np.mean(processing_times)
 
 
-def create_reid_model(checkpoint: str):
-    '''
-    Возвращает модель для REID.
-    '''
-    reid_model = create('resnet50', num_features=0, dropout=0, num_classes=0)
-
-    reid_model.cuda()
-    reid_model = nn.DataParallel(reid_model)
-
-    initial_weights = load_checkpoint(checkpoint)
-    copy_state_dict(initial_weights['state_dict'], reid_model)
-
-    return reid_model
-
-
-def clean_dist_matrix(matrix: np.ndarray, value: float = 100.0):
-    non_100_rows = (matrix != value).any(dim=1)
-    matrix = matrix[non_100_rows]
-
-    non_100_cols = (matrix != value).any(dim=0)
-    matrix = matrix[:, non_100_cols]
-
-    return matrix
-
-
 class MCMOT:
     def __init__(
         self,
         person_detector: YOLO,
-        feature_extractor: nn.Module,
         num_cams: int,
         similarity_threshold: float,
         log_dir: str,
         tracker_path: str,
     ):
         self._detectors = [copy.deepcopy(person_detector) for _ in range(num_cams)]
-
-        self._feature_extractor = feature_extractor
-        self._feature_extractor.eval()
-        self._fe_transforms = T.Compose([
-            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
 
         self._similarity_threshold = similarity_threshold
         self._log_dir = log_dir
@@ -121,14 +87,13 @@ class MCMOT:
         frame: np.ndarray,
         boxes,
     ) -> List[np.ndarray]:
-        # persons_imgs = []
         persons_ids = []
         embeddings = []
 
         for box in boxes:
             x1, y1, x2, y2 = box.xyxy.cpu().int().numpy().reshape(-1)
             person_img = cv2.resize(frame[y1:y2, x1: x2, :], (256, 128))
-            # persons_imgs.append(person_img)
+
             try:
                 track_id = box.id.int().item()
             except AttributeError:
@@ -137,16 +102,6 @@ class MCMOT:
 
             output = self.feature_extraction.predict_img(person_img)
             embeddings.append(output)
-
-        # if not persons_imgs:
-        #     return {}
-        
-        # persons_imgs = np.stack(persons_imgs, axis=0)
-        # persons_imgs = torch.tensor(persons_imgs.transpose(0, 3, 1, 2)) / 255.
-        # persons_imgs = self._fe_transforms(persons_imgs)
-
-        # with torch.no_grad():
-        #     embeddings = self._feature_extractor(persons_imgs)
 
         return {
             track_id: embedding
@@ -247,17 +202,11 @@ if __name__ == '__main__':
 
     processing_times = []
 
-    reid_model_checkpoint = os.path.join(
-        args.mount,
-        'reid_model.pth.tar',
-    )
-
     videos_list = Path(args.videos_dir).rglob('*.mp4')
     videos_list = sorted(videos_list)
 
     mcmot = MCMOT(
         person_detector=YOLO(os.path.join(args.mount, "yolov8l.pt")),
-        feature_extractor=create_reid_model(reid_model_checkpoint),
         similarity_threshold=0.03,
         num_cams=len(videos_list),
         log_dir=args.save_dir,
